@@ -1,13 +1,3 @@
-'''
-https://medium.com/analytics-vidhya/depth-sensing-and-3d-reconstruction-512ed121aa60
-
-ffmpeg -framerate 10 -pattern_type glob -i 'imageLeftBW/*.png' -vf 'scale=-2:min(1080\,trunc(ih/2)*2)' -c:v libx264 -pix_fmt yuv420p imageLeftBW.mp4
-ffmpeg -framerate 10 -pattern_type glob -i 'imageRightBW/*.png' -vf 'scale=-2:min(1080\,trunc(ih/2)*2)' -c:v libx264 -pix_fmt yuv420p imageRightBW.mp4
-ffmpeg -framerate 10 -pattern_type glob -i 'disparityMap/*.png' -vf 'scale=-2:min(1080\,trunc(ih/2)*2)' -c:v libx264 -pix_fmt yuv420p disparityMap.mp4
-ffmpeg -framerate 10 -pattern_type glob -i 'backProjection/*.png' -vf 'scale=-2:min(1080\,trunc(ih/2)*2)' -c:v libx264 -pix_fmt yuv420p backProjection.mp4
-
-ffmpeg -i imageLeftBW.mp4 -i imageRightBW.mp4 -i disparityMap.mp4 -i backProjection.mp4 -filter_complex "[0:v][1:v]hstack=inputs=2[top];[2:v][3:v]hstack=inputs=2[bottom];[top][bottom]vstack=inputs=2[v]" -map "[v]" output.mp4
-'''
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
@@ -16,12 +6,39 @@ import warnings
 warnings.filterwarnings('ignore')
 plt.switch_backend('agg')
 import glob
+from colour_demosaicing import demosaicing_CFA_Bayer_bilinear as demosaic
+from PIL import Image
+from camera_model import CameraModel
 
 
 
-dataImgLeft     = '../data/data_scene_flow/testing/image_2/'
-dataImgRight    = '../data/data_scene_flow/testing/image_3/'
-dataCalib       = '../data/data_scene_flow_calib/testing/calib_cam_to_cam/'
+dataImgLeft     = '/mnt/efs/temp/oxford-robotcar/2014-07-14-15-42-55/stereo/left/'
+dataImgRight    = '/mnt/efs/temp/oxford-robotcar/2014-07-14-15-42-55/stereo/right/'
+dataCalib       = '/mnt/efs/temp/kitti/data_scene_flow_calib/testing/calib_cam_to_cam/'
+outputPath      = '/mnt/efs/temp/outs/oxford-robotcar/'
+model = CameraModel('/mnt/efs/temp/oxford-robotcar/robotcar-dataset-sdk-3.1/models/', '/mnt/efs/temp/oxford-robotcar/2014-07-14-15-42-55/stereo/left/')
+
+
+def load_image(image_path, model=None):
+    """Loads and rectifies an image from file.
+    Args:
+        image_path (str): path to an image from the dataset.
+        model (camera_model.CameraModel): if supplied, model will be used to undistort image.
+    Returns:
+        numpy.ndarray: demosaiced and optionally undistorted image
+    """
+    if model:
+        camera = model.camera
+    else:
+        camera = re.search('(stereo|mono_(left|right|rear))', image_path).group(0)
+
+    img = Image.open(image_path)
+    img = demosaic(img, pattern)
+    if model:
+        img = model.undistort(img)
+
+    return np.array(img).astype(np.uint8)
+
 
 
 
@@ -47,8 +64,15 @@ def write_ply(fn, verts, colors):
 
 
 def doStuff(fileImgLeft, fileImgRight, fileCalib, savePath):
-    img_left_color = cv2.imread(fileImgLeft)
-    img_right_color = cv2.imread(fileImgRight)
+    img_left_color = Image.open(fileImgLeft)
+    img_right_color = Image.open(fileImgRight)
+    img_left_color = demosaic(img_left_color, 'gbrg')
+    img_right_color = demosaic(img_right_color, 'gbrg')
+    img_left_color = model.undistort(img_left_color)
+    img_right_color = model.undistort(img_right_color)
+    img_left_color = np.array(img_left_color).astype(np.uint8)
+    img_right_color = np.array(img_right_color).astype(np.uint8)
+
     imgLeftBW = cv2.blur(cv2.cvtColor(img_left_color, cv2.COLOR_RGB2GRAY),(5,5))
     imgRightBW = cv2.blur(cv2.cvtColor(img_right_color, cv2.COLOR_RGB2GRAY),(5,5))
 
@@ -60,20 +84,13 @@ def doStuff(fileImgLeft, fileImgRight, fileCalib, savePath):
 
 
     # step 2 - calculate the 3D point cloud with XYZRGB information
-    matrix_type_1 = 'P_rect_02'
-    matrix_type_2 = 'P_rect_03'
-    with open(fileCalib, 'r') as f:
-        fin = f.readlines()
-        for line in fin:
-            if line[:9] == matrix_type_1:
-                calib_matrix_1 = np.array(line[10:].strip().split(' ')).astype('float32').reshape(3,-1)
-            elif line[:9] == matrix_type_2:
-                calib_matrix_2 = np.array(line[10:].strip().split(' ')).astype('float32').reshape(3,-1)
+    cam1 = [[983.0440,  0.0,        643.646973],
+            [0.0,       983.0440,   493.378998],
+            [0.0,       0.0,        1.0     ]]
+    cam1 = np.array(cam1)
+    cam2 = cam1
 
-
-    cam1 = calib_matrix_1[:,:3] # left image - P2
-    cam2 = calib_matrix_2[:,:3] # right image - P3
-    Tmat = np.array([0.54, 0., 0.])
+    Tmat = np.array([0.24, 0., 0.])
     rev_proj_matrix = np.zeros((4,4))
     cv2.stereoRectify(cameraMatrix1 = cam1,cameraMatrix2 = cam2, \
                       distCoeffs1 = 0, distCoeffs2 = 0, \
@@ -116,11 +133,11 @@ def doStuff(fileImgLeft, fileImgRight, fileCalib, savePath):
             col = (int(img_colors[i, 2]), int(img_colors[i, 1]), int(img_colors[i, 0]))
             cv2.circle(imgBackProjected, (pt_x, pt_y), 1, col)
 
-    write_ply('outs/pointCloud/' + fileName.split('.')[0] + '.ply', out_points, out_colors)
-    plt.imsave('outs/imageLeftBW/' + fileName, imgLeftBW, cmap='gray')
-    plt.imsave('outs/imageRightBW/' + fileName, imgRightBW, cmap='gray')
-    plt.imsave('outs/disparityMap/' + fileName, disparityImg, cmap='hsv')
-    plt.imsave('outs/backProjection/' + fileName, cv2.cvtColor(imgBackProjected, cv2.COLOR_RGB2BGR))
+    write_ply(outputPath + 'pointCloud/' + fileName.split('.')[0] + '.ply', out_points, out_colors)
+    plt.imsave(outputPath + 'imageLeftBW/' + fileName, imgLeftBW, cmap='gray')
+    plt.imsave(outputPath + 'imageRightBW/' + fileName, imgRightBW, cmap='gray')
+    plt.imsave(outputPath + 'disparityMap/' + fileName, disparityImg, cmap='hsv')
+    plt.imsave(outputPath + 'backProjection/' + fileName, cv2.cvtColor(imgBackProjected, cv2.COLOR_RGB2BGR))
     print('done: ', fileName)
 
 
@@ -132,5 +149,9 @@ if __name__ == '__main__':
         fileImgLeft     = dataImgLeft + fileName
         fileImgRight    = dataImgRight + fileName
         fileCalib       = dataCalib + fileName[:6] + '.txt'
-        doStuff(fileImgLeft, fileImgRight, fileCalib, fileName)
+
+        try:
+            doStuff(fileImgLeft, fileImgRight, fileCalib, fileName)
+        except:
+            pass
 
