@@ -54,12 +54,6 @@ def process_poses(pose_history_file):
             pose_list = [float(i) for i in splitted_line[1:-1]]
             pose = np.array(pose_list, dtype=np.float32)
             pose = np.reshape(pose, [3, 4])
-
-          #  append = np.array([[0,0,0,1]], dtype=np.float)
-          #  pose = np.vstack([pose, append])
-
-
-          #  pose_dict[idx] = np.linalg.inv(pose)[0:3, :]
             pose_dict[idx] = pose
 
     return pose_dict
@@ -93,7 +87,6 @@ if __name__ == '__main__':
 
 
         uv, depth = model.project(pointcloud, image.shape, pose)
-       # print(image.shape)
         plt.imshow(image)
         scat = plt.scatter(np.ravel(uv[0, :]), np.ravel(uv[1, :]), s=10, 
                     c=depth, edgecolors='none', cmap='jet')
@@ -103,11 +96,8 @@ if __name__ == '__main__':
         plt.xticks([])
         plt.yticks([])
         plt.pause(0.01)
-        #plt.savefig('../result_imgs/{}.png'.format(id_image))
         scat.remove()
 
-    results = os.listdir('../result_imgs/')
-    results = sorted(results, key=lambda x: int(x.split('.')[0]))
     
 
 
